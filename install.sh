@@ -14,6 +14,12 @@ if [[ ! -f "$root/Cargo.toml" || ! -f "$root/manifest.json" ]]; then
   root="$temporary/repo"
 fi
 
+if [[ -e "$HOME/.local/bin/vesp" ]] &&
+   ! grep -Fq 'clipboard-history" ch "$@"' "$HOME/.local/bin/vesp"; then
+  echo "Existing ~/.local/bin/vesp belongs to another program; installation stopped." >&2
+  exit 1
+fi
+
 for command in git omarchy hyprctl systemctl; do
   command -v "$command" >/dev/null || { echo "Missing command: $command" >&2; exit 1; }
 done
@@ -33,6 +39,8 @@ install -Dm755 "$root/target/release/clipboard-history" "$HOME/.local/bin/clipbo
 
 cat > "$HOME/.local/bin/vesp" <<'EOF'
 #!/usr/bin/env bash
+# clipboard-history launcher
+if [[ "${1:-}" == "ch" ]]; then shift; fi
 exec "$HOME/.local/bin/clipboard-history" ch "$@"
 EOF
 chmod 755 "$HOME/.local/bin/vesp"

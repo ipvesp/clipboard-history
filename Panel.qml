@@ -11,6 +11,10 @@ Panel {
   property var anchorItem: null
   property var hostWidget: null
   property var preferences: ({ history_limit: 100, show_bar: true })
+  onPreferencesChanged: {
+    if (limitInput && !limitInput.activeFocus)
+      limitInput.text = String(preferences.history_limit || 100)
+  }
 
   function open() { root.controller.show() }
   function close() { root.controller.hide() }
@@ -48,8 +52,8 @@ Panel {
 
         Text {
           text: "CLIPBOARD HISTORY"
-          color: root.contentForeground
-          font.family: root.contentFontFamily
+          color: root.barForeground
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.subtitle
           font.bold: true
         }
@@ -58,12 +62,12 @@ Panel {
           width: parent.width
           height: Style.space(38)
           radius: 0
-          color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08)
+          color: Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.08)
           Text {
             anchors.centerIn: parent
             text: "Open history"
-            color: root.contentForeground
-            font.family: root.contentFontFamily
+            color: root.barForeground
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
           }
           MouseArea {
             anchors.fill: parent
@@ -76,25 +80,35 @@ Panel {
           spacing: Style.space(10)
           Text {
             text: "Saved items"
-            color: root.contentForeground
-            font.family: root.contentFontFamily
+            color: root.barForeground
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
             anchors.verticalCenter: parent.verticalCenter
           }
           Item { width: Math.max(0, parent.width - 178); height: 1 }
           Text {
             text: "−"
-            color: root.contentForeground
+            color: root.barForeground
             font.pixelSize: 20
             MouseArea { anchors.fill: parent; onClicked: root.changeLimit(Number(root.preferences.history_limit || 100) - 1) }
           }
-          Text {
+          TextInput {
+            id: limitInput
+            width: Style.space(34)
             text: String(root.preferences.history_limit || 100)
-            color: root.contentForeground
+            color: root.barForeground
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            horizontalAlignment: TextInput.AlignHCenter
+            selectByMouse: true
             anchors.verticalCenter: parent.verticalCenter
+            validator: IntValidator { bottom: 5; top: 200 }
+            onEditingFinished: {
+              if (acceptableInput) root.changeLimit(Number(text))
+              else text = String(root.preferences.history_limit || 100)
+            }
           }
           Text {
             text: "+"
-            color: root.contentForeground
+            color: root.barForeground
             font.pixelSize: 20
             MouseArea { anchors.fill: parent; onClicked: root.changeLimit(Number(root.preferences.history_limit || 100) + 1) }
           }
@@ -102,8 +116,8 @@ Panel {
 
         Text {
           text: "Show in bar  •  " + (root.preferences.show_bar === false ? "Off" : "On")
-          color: root.contentForeground
-          font.family: root.contentFontFamily
+          color: root.barForeground
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
           MouseArea {
             anchors.fill: parent
             onClicked: {

@@ -30,5 +30,9 @@ PY
   if [[ -n "$errors" ]]; then echo "$errors" >&2; exit 1; fi
 fi
 
-rm -f "$HOME/.local/bin/clipboard-history" "$HOME/.local/bin/vesp"
+rm -f "$HOME/.local/bin/clipboard-history"
+if [[ -f "$HOME/.local/bin/vesp" ]] &&
+   grep -Fq 'clipboard-history" ch "$@"' "$HOME/.local/bin/vesp"; then
+  rm -f "$HOME/.local/bin/vesp"
+fi
 echo "Clipboard History removed. Settings and history remain in your home directory."
