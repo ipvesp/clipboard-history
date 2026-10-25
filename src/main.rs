@@ -28,6 +28,7 @@ const POPUP_MARGIN: i32 = 10;
 struct Popup {
     window: ApplicationWindow,
     search: Entry,
+    filter: gtk::DropDown,
     list: ListBox,
     items: Rc<RefCell<Vec<ClipboardItem>>>,
     saved_size: Rc<Cell<(i32, i32)>>,
@@ -37,6 +38,8 @@ struct Popup {
 struct ClipboardItem {
     id: i64,
     content: String,
+    kind: String,
+    data: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,6 +99,11 @@ fn main() {
         Some("store") => {
             if let Err(err) = store_from_stdin() {
                 eprintln!("Store error: {err}");
+            }
+        }
+        Some("capture") => {
+            if let Err(err) = capture_clipboard() {
+                eprintln!("Capture error: {err}");
             }
         }
 
@@ -217,6 +225,8 @@ fn open_database() -> rusqlite::Result<Connection> {
         CREATE TABLE IF NOT EXISTS clipboard_items (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             content    TEXT NOT NULL,
+            kind       TEXT NOT NULL DEFAULT 'text',
+            data       BLOB,
             created_at INTEGER NOT NULL DEFAULT (unixepoch())
         );
 
@@ -224,6 +234,21 @@ fn open_database() -> rusqlite::Result<Connection> {
         ON clipboard_items(created_at DESC);
         ",
     )?;
+
+    let mut columns = connection.prepare("PRAGMA table_info(clipboard_items)")?;
+    let names: Vec<String> = columns
+        .query_map([], |row| row.get(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !names.iter().any(|name| name == "kind") {
+        connection.execute(
+            "ALTER TABLE clipboard_items ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'",
+            [],
+        )?;
+    }
+    if !names.iter().any(|name| name == "data") {
+        connection.execute("ALTER TABLE clipboard_items ADD COLUMN data BLOB", [])?;
+    }
+    drop(columns);
 
     Ok(connection)
 }
@@ -245,21 +270,91 @@ fn store_from_stdin() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    store_item(&content, classify_text(&content), None)
+}
+
+fn classify_text(content: &str) -> &'static str {
+    let trimmed = content.trim();
+    if (trimmed.starts_with("https://") || trimmed.starts_with("http://"))
+        && !trimmed.chars().any(char::is_whitespace)
+    {
+        "link"
+    } else if trimmed.contains('\n')
+        && (trimmed.contains("    ")
+            || trimmed.contains("\t")
+            || trimmed.contains("{")
+            || trimmed.contains("=>")
+            || trimmed.contains("def ")
+            || trimmed.contains("fn "))
+    {
+        "code"
+    } else {
+        "text"
+    }
+}
+
+fn capture_clipboard() -> Result<(), Box<dyn std::error::Error>> {
+    // wl-paste --watch sends clipboard data to the command on stdin.
+    // Drain it before querying formats so the watcher cannot stall on a full pipe.
+    let mut watched_content = Vec::new();
+    io::stdin().read_to_end(&mut watched_content)?;
+    let types = Command::new("wl-paste").arg("--list-types").output()?;
+    if !types.status.success() {
+        return Ok(());
+    }
+    let types = String::from_utf8_lossy(&types.stdout);
+    for mime in [
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/gif",
+        "image/bmp",
+    ] {
+        if types.lines().any(|line| line == mime) {
+            let image = Command::new("wl-paste")
+                .args(["--no-newline", "--type", mime])
+                .output()?;
+            if image.status.success()
+                && !image.stdout.is_empty()
+                && image.stdout.len() <= 10_000_000
+            {
+                return store_item(mime, "image", Some(&image.stdout));
+            }
+        }
+    }
+    let text = Command::new("wl-paste")
+        .args(["--no-newline", "--type", "text/plain"])
+        .output()?;
+    if text.status.success()
+        && let Ok(content) = String::from_utf8(text.stdout)
+    {
+        if !content.trim().is_empty() && content.len() <= 1_000_000 {
+            store_item(&content, classify_text(&content), None)?;
+        }
+    }
+    Ok(())
+}
+
+fn store_item(
+    content: &str,
+    kind: &str,
+    data: Option<&[u8]>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut connection = open_database()?;
     let transaction = connection.transaction()?;
 
     // Aynı içerik tekrar kopyalanırsa eski kaydı silip en üste taşı.
     transaction.execute(
-        "DELETE FROM clipboard_items WHERE content = ?1",
-        params![content],
+        "DELETE FROM clipboard_items WHERE kind = ?1 AND content = ?2 AND data IS ?3",
+        params![kind, content, data],
     )?;
 
     transaction.execute(
         "
-        INSERT INTO clipboard_items(content, created_at)
-        VALUES (?1, unixepoch())
+        INSERT INTO clipboard_items(content, kind, data, created_at)
+        VALUES (?1, ?2, ?3, unixepoch())
         ",
-        params![content],
+        params![content, kind, data],
     )?;
 
     // Keep the configured number of unique clipboard entries.
@@ -300,54 +395,29 @@ fn clear_history() -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn load_items(search: &str) -> rusqlite::Result<Vec<ClipboardItem>> {
+fn load_items(search: &str, filter: &str) -> rusqlite::Result<Vec<ClipboardItem>> {
     let connection = open_database()?;
     let mut output = Vec::new();
-
-    if search.trim().is_empty() {
-        let mut statement = connection.prepare(
-            "
-            SELECT id, content
-            FROM clipboard_items
-            ORDER BY created_at DESC, id DESC
-            LIMIT ?1
-            ",
-        )?;
-
-        let rows = statement.query_map(params![settings().history_limit as i64], |row| {
+    let search = format!("%{}%", search.trim());
+    let mut statement = connection.prepare(
+        "SELECT id, content, kind, data FROM clipboard_items
+         WHERE content LIKE ?1
+           AND (?2 = 'all' OR (?2 = 'text' AND kind IN ('text', 'code')) OR kind = ?2)
+         ORDER BY created_at DESC, id DESC LIMIT ?3",
+    )?;
+    let rows = statement.query_map(
+        params![search, filter, settings().history_limit as i64],
+        |row| {
             Ok(ClipboardItem {
                 id: row.get(0)?,
                 content: row.get(1)?,
+                kind: row.get(2)?,
+                data: row.get(3)?,
             })
-        })?;
-
-        for row in rows {
-            output.push(row?);
-        }
-    } else {
-        let search = format!("%{}%", search);
-
-        let mut statement = connection.prepare(
-            "
-            SELECT id, content
-            FROM clipboard_items
-            WHERE content LIKE ?1
-            ORDER BY created_at DESC, id DESC
-            LIMIT ?2
-            ",
-        )?;
-
-        let rows =
-            statement.query_map(params![search, settings().history_limit as i64], |row| {
-                Ok(ClipboardItem {
-                    id: row.get(0)?,
-                    content: row.get(1)?,
-                })
-            })?;
-
-        for row in rows {
-            output.push(row?);
-        }
+        },
+    )?;
+    for row in rows {
+        output.push(row?);
     }
 
     Ok(output)
@@ -361,19 +431,27 @@ fn delete_item(id: i64) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn copy_to_clipboard(content: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut process = Command::new("wl-copy").stdin(Stdio::piped()).spawn()?;
+fn copy_item(item: &ClipboardItem) -> Result<(), Box<dyn std::error::Error>> {
+    copy_item_with(item, "wl-copy")
+}
 
-    if let Some(stdin) = process.stdin.as_mut() {
-        stdin.write_all(content.as_bytes())?;
+fn copy_item_with(item: &ClipboardItem, copier: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut command = Command::new(copier);
+    let bytes = if item.kind == "image" {
+        command.args(["--type", &item.content]);
+        item.data.as_deref().ok_or("Image data is missing")?
+    } else {
+        item.content.as_bytes()
+    };
+    let mut process = command.stdin(Stdio::piped()).spawn()?;
+    process
+        .stdin
+        .take()
+        .ok_or("wl-copy stdin unavailable")?
+        .write_all(bytes)?;
+    if !process.wait()?.success() {
+        return Err("wl-copy failed".into());
     }
-
-    let status = process.wait()?;
-
-    if !status.success() {
-        return Err("wl-copy başarısız oldu".into());
-    }
-
     Ok(())
 }
 
@@ -412,7 +490,7 @@ fn run_ui() {
             popup.window.present();
             position_popup(&popup.search, size);
             if popup.search.text().is_empty() {
-                refresh_list(&popup.list, &popup.items, "");
+                refresh_list(&popup.list, &popup.items, "", filter_key(&popup.filter));
             } else {
                 popup.search.set_text("");
             }
@@ -451,7 +529,15 @@ fn build_ui(app: &Application) -> Popup {
 
     let title = Label::new(Some("CLIPBOARD HISTORY"));
     title.set_xalign(0.0);
+    title.set_hexpand(true);
     title.add_css_class("clipper-title");
+
+    let filter = gtk::DropDown::from_strings(&["All", "Text", "Image", "Link"]);
+    filter.add_css_class("clipper-filter");
+    filter.set_tooltip_text(Some("Filter history"));
+    let heading = GtkBox::new(Orientation::Horizontal, 8);
+    heading.append(&title);
+    heading.append(&filter);
 
     let search = Entry::new();
     search.set_placeholder_text(Some("Search"));
@@ -471,7 +557,7 @@ fn build_ui(app: &Application) -> Popup {
         .build();
 
     root.append(&search);
-    root.append(&title);
+    root.append(&heading);
     root.append(&scroll);
 
     shell.append(&root);
@@ -479,7 +565,7 @@ fn build_ui(app: &Application) -> Popup {
 
     let items: Rc<RefCell<Vec<ClipboardItem>>> = Rc::new(RefCell::new(Vec::new()));
 
-    refresh_list(&list, &items, "");
+    refresh_list(&list, &items, "", filter_key(&filter));
 
     if let Some(first_row) = list.row_at_index(0) {
         list.select_row(Some(&first_row));
@@ -488,10 +574,23 @@ fn build_ui(app: &Application) -> Popup {
     {
         let list = list.clone();
         let items = items.clone();
+        let filter = filter.clone();
 
         search.connect_changed(move |entry| {
-            refresh_list(&list, &items, entry.text().as_str());
+            refresh_list(&list, &items, entry.text().as_str(), filter_key(&filter));
 
+            if let Some(first_row) = list.row_at_index(0) {
+                list.select_row(Some(&first_row));
+            }
+        });
+    }
+
+    {
+        let list = list.clone();
+        let items = items.clone();
+        let search = search.clone();
+        filter.connect_selected_notify(move |filter| {
+            refresh_list(&list, &items, search.text().as_str(), filter_key(filter));
             if let Some(first_row) = list.row_at_index(0) {
                 list.select_row(Some(&first_row));
             }
@@ -511,7 +610,7 @@ fn build_ui(app: &Application) -> Popup {
             }
 
             if let Some(item) = items.borrow().get(index as usize) {
-                if let Err(err) = copy_to_clipboard(&item.content) {
+                if let Err(err) = copy_item(item) {
                     eprintln!("Clipboard copy error: {err}");
                     return;
                 }
@@ -527,6 +626,7 @@ fn build_ui(app: &Application) -> Popup {
         let window = window.clone();
         let list = list.clone();
         let search = search.clone();
+        let filter = filter.clone();
         let items = items.clone();
         let saved_size = saved_size.clone();
 
@@ -543,7 +643,7 @@ fn build_ui(app: &Application) -> Popup {
 
                         if index >= 0 {
                             if let Some(item) = items.borrow().get(index as usize) {
-                                if let Err(err) = copy_to_clipboard(&item.content) {
+                                if let Err(err) = copy_item(item) {
                                     eprintln!("Clipboard copy error: {err}");
                                 } else {
                                     hide_popup(&window, &saved_size);
@@ -567,7 +667,12 @@ fn build_ui(app: &Application) -> Popup {
                                     eprintln!("Delete error: {err}");
                                 }
 
-                                refresh_list(&list, &items, search.text().as_str());
+                                refresh_list(
+                                    &list,
+                                    &items,
+                                    search.text().as_str(),
+                                    filter_key(&filter),
+                                );
 
                                 if let Some(next_row) = list
                                     .row_at_index(index)
@@ -619,6 +724,7 @@ fn build_ui(app: &Application) -> Popup {
     Popup {
         window,
         search,
+        filter,
         list,
         items,
         saved_size,
@@ -663,12 +769,26 @@ fn hide_popup(window: &ApplicationWindow, saved_size: &Cell<(i32, i32)>) {
     window.hide();
 }
 
-fn refresh_list(list: &ListBox, items: &Rc<RefCell<Vec<ClipboardItem>>>, search: &str) {
+fn filter_key(filter: &gtk::DropDown) -> &'static str {
+    match filter.selected() {
+        1 => "text",
+        2 => "image",
+        3 => "link",
+        _ => "all",
+    }
+}
+
+fn refresh_list(
+    list: &ListBox,
+    items: &Rc<RefCell<Vec<ClipboardItem>>>,
+    search: &str,
+    filter: &str,
+) {
     while let Some(child) = list.first_child() {
         list.remove(&child);
     }
 
-    let loaded = match load_items(search) {
+    let loaded = match load_items(search, filter) {
         Ok(items) => items,
         Err(err) => {
             eprintln!("Database read error: {err}");
@@ -688,6 +808,31 @@ fn create_row(item: &ClipboardItem) -> ListBoxRow {
     let row = ListBoxRow::new();
     row.add_css_class("clipper-row");
 
+    let container = GtkBox::new(Orientation::Horizontal, 10);
+    if item.kind == "image" {
+        if let Some(data) = item.data.as_ref()
+            && let Ok(pixbuf) = gtk::gdk_pixbuf::Pixbuf::from_read(io::Cursor::new(data.clone()))
+        {
+            let picture = gtk::Picture::for_pixbuf(&pixbuf);
+            picture.set_size_request(180, 96);
+            picture.set_can_shrink(true);
+            picture.set_keep_aspect_ratio(true);
+            picture.set_halign(gtk::Align::Start);
+            picture.set_margin_top(8);
+            picture.set_margin_bottom(8);
+            picture.set_margin_start(12);
+            container.append(&picture);
+        } else {
+            let fallback = Label::new(Some("Image preview unavailable"));
+            fallback.set_margin_top(12);
+            fallback.set_margin_bottom(12);
+            fallback.set_margin_start(12);
+            container.append(&fallback);
+        }
+        row.set_child(Some(&container));
+        return row;
+    }
+
     let preview = normalize_preview(&item.content);
 
     let label = Label::new(Some(&preview));
@@ -702,7 +847,15 @@ fn create_row(item: &ClipboardItem) -> ListBoxRow {
     label.set_single_line_mode(true);
     label.add_css_class("clipper-preview");
 
-    row.set_child(Some(&label));
+    if item.kind != "text" {
+        let badge = Label::new(Some(if item.kind == "link" { "LINK" } else { "CODE" }));
+        badge.add_css_class("clipper-kind");
+        badge.set_margin_start(12);
+        container.append(&badge);
+        label.set_margin_start(0);
+    }
+    container.append(&label);
+    row.set_child(Some(&container));
 
     row
 }
@@ -927,6 +1080,21 @@ fn load_css(provider: &CssProvider) {
         color: __MUTED__;
     }
 
+    dropdown.clipper-filter button {
+        border-radius: 0;
+        min-height: 26px;
+        padding: 2px 8px;
+        background: __SURFACE__;
+        color: __FG__;
+        border: 1px solid __BORDER__;
+        box-shadow: none;
+    }
+
+    dropdown.clipper-filter button:hover,
+    dropdown.clipper-filter button:focus {
+        border-color: __ACCENT__;
+    }
+
     entry.clipper-search {
         min-height: 44px;
         border-radius: 0;
@@ -973,6 +1141,12 @@ fn load_css(provider: &CssProvider) {
         font-size: 13px;
     }
 
+    .clipper-kind {
+        color: __ACCENT__;
+        font-size: 10px;
+        font-weight: 700;
+    }
+
     .clipper-row:selected .clipper-preview {
         color: __FG__;
     }
@@ -997,4 +1171,53 @@ fn load_css(provider: &CssProvider) {
     }
 
     provider.load_from_data(&css);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ClipboardItem, classify_text, copy_item_with};
+    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+
+    #[test]
+    fn recognizes_links_and_code_without_changing_clipboard_text() {
+        assert_eq!(classify_text("https://example.org/path"), "link");
+        assert_eq!(
+            classify_text("fn main() {\n    println!(\"hi\");\n}"),
+            "code"
+        );
+        assert_eq!(classify_text("A regular note\nwith another line"), "text");
+    }
+
+    #[test]
+    fn copies_image_bytes_with_original_mime_type() {
+        let dir = std::env::temp_dir().join(format!(
+            "clipboard-history-copy-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let copier = dir.join("copier");
+        fs::write(
+            &copier,
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$*\" > '{}'\ncat > '{}'\n",
+                dir.join("args").display(),
+                dir.join("bytes").display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&copier, fs::Permissions::from_mode(0o700)).unwrap();
+        let item = ClipboardItem {
+            id: 1,
+            content: "image/png".into(),
+            kind: "image".into(),
+            data: Some(vec![0, 1, 2, 255]),
+        };
+        copy_item_with(&item, copier.to_str().unwrap()).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.join("args")).unwrap(),
+            "--type image/png"
+        );
+        assert_eq!(fs::read(dir.join("bytes")).unwrap(), vec![0, 1, 2, 255]);
+        fs::remove_dir_all(PathBuf::from(dir)).unwrap();
+    }
 }

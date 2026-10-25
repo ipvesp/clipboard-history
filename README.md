@@ -1,11 +1,11 @@
 # Clipboard History
 
-A clipboard history popup for Omarchy. Press **Super+V** to open it beside the pointer. The Omarchy bar icon opens a compact settings panel.
+A clipboard history popup for Omarchy. It saves text, links, code snippets, and common image formats. Press **Super+V** to open it beside the pointer. The Omarchy bar icon opens a compact settings panel.
 
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ipvesp/clipboard-history/v1.0.2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ipvesp/clipboard-history/v1.1.0/install.sh | bash
 ```
 
 The installer checks for `gtk4`, `wl-clipboard`, `pkgconf` and Rust, installs missing packages with `sudo pacman`, builds the application, creates a user service to watch copied text, adds the Super+V binding, and enables the Omarchy bar plugin. Review `install.sh` before running it. It does not require root for app or config files.
@@ -28,7 +28,7 @@ vesp ch status
 vesp ch clear
 ```
 
-The settings file is `$XDG_CONFIG_HOME/clipboard-history/settings.json` (or `~/.config/clipboard-history/settings.json`). History is stored in `$XDG_DATA_HOME/clipboard-history/history.db` (or `~/.local/share/clipboard-history/history.db`). Clipboard text stays on the local computer.
+The settings file is `$XDG_CONFIG_HOME/clipboard-history/settings.json` (or `~/.config/clipboard-history/settings.json`). History is stored in `$XDG_DATA_HOME/clipboard-history/history.db` (or `~/.local/share/clipboard-history/history.db`). Clipboard contents stay on the local computer. Images larger than 10 MB and text larger than 1 MB are skipped. Links and code are recognized from text and can be copied back without changes.
 
 ## Remove
 

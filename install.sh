@@ -39,6 +39,8 @@ fi
 omarchy plugin validate "$root"
 (cd "$root" && cargo build --release --locked)
 install -Dm755 "$root/target/release/clipboard-history" "$HOME/.local/bin/clipboard-history"
+# GTK keeps one application process alive; stop the old instance after replacing its binary.
+pkill -u "$(id -u)" -f "^$HOME/.local/bin/clipboard-history$" 2>/dev/null || true
 
 cat > "$HOME/.local/bin/vesp" <<'EOF'
 #!/usr/bin/env bash
@@ -55,7 +57,7 @@ Description=Clipboard History watcher
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/wl-paste --type text --watch %h/.local/bin/clipboard-history store
+ExecStart=/usr/bin/wl-paste --watch %h/.local/bin/clipboard-history capture
 Restart=always
 RestartSec=2
 
