@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.ipvesp.clipboard-history",
+  "name": "Clipboard History",
+  "version": "1.0.0",
+  "author": "ipvesp",
+  "license": "MIT",
+  "description": "Clipboard history with a keyboard popup and a configurable bar widget.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Clipboard History",
+    "category": "Utility",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
