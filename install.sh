@@ -3,10 +3,13 @@ set -euo pipefail
 
 repo_url="https://github.com/ipvesp/clipboard-history.git"
 plugin_id="io.github.ipvesp.clipboard-history"
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root=""
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+  root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 temporary=""
 
-if [[ ! -f "$root/Cargo.toml" || ! -f "$root/manifest.json" ]]; then
+if [[ -z "$root" || ! -f "$root/Cargo.toml" || ! -f "$root/manifest.json" ]]; then
   command -v git >/dev/null || { echo "Missing command: git" >&2; exit 1; }
   temporary="$(mktemp -d)"
   trap 'rm -rf "$temporary"' EXIT
@@ -99,4 +102,4 @@ else
   omarchy plugin enable "$plugin_id" || true
 fi
 
-echo "Installed Clipboard History 1.0.0. Press Super+V or run: vesp ch --help"
+echo "Installed Clipboard History $(jq -r '.version' "$root/manifest.json"). Press Super+V or run: vesp ch --help"

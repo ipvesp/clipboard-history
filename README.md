@@ -47,3 +47,5 @@ cargo build --release --locked
 ```
 
 `manifest.json`, `BarWidget.qml`, and `Panel.qml` are the Omarchy plugin. The Rust application provides clipboard storage, the popup, and the `vesp ch` commands.
+
+The Cargo and plugin versions follow SemVer together. Each published version receives a `vX.Y.Z` GitHub Release.
