@@ -421,7 +421,7 @@ fn run_ui() {
         }
     });
 
-    application.run();
+    application.run_with_args(&["clipboard-history"]);
 }
 
 fn build_ui(app: &Application) -> Popup {

@@ -5,7 +5,7 @@ A clipboard history popup for Omarchy. Press **Super+V** to open it beside the p
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ipvesp/clipboard-history/v1.0.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ipvesp/clipboard-history/v1.0.2/install.sh | bash
 ```
 
 The installer checks for `gtk4`, `wl-clipboard`, `pkgconf` and Rust, installs missing packages with `sudo pacman`, builds the application, creates a user service to watch copied text, adds the Super+V binding, and enables the Omarchy bar plugin. Review `install.sh` before running it. It does not require root for app or config files.

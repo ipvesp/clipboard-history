@@ -99,6 +99,7 @@ if [[ -n "$errors" ]]; then echo "$errors" >&2; exit 1; fi
 if ! omarchy plugin list --json | jq -e --arg id "$plugin_id" 'any(.[]; .id == $id)' >/dev/null; then
   omarchy plugin add "$repo_url" --enable --yes
 else
+  omarchy plugin update "$plugin_id" --yes
   omarchy plugin enable "$plugin_id" || true
 fi
 
