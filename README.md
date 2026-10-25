@@ -4,11 +4,14 @@ A clipboard history popup for Omarchy. It saves text, links, code snippets, and 
 
 ## Install
 
+Get the reviewed commit SHA from the [v1.1.1 release](https://github.com/ipvesp/clipboard-history/releases/tag/v1.1.1), then run:
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ipvesp/clipboard-history/v1.1.0/install.sh | bash
+CLIPBOARD_HISTORY_COMMIT=<reviewed-40-character-SHA>
+curl -fsSL "https://raw.githubusercontent.com/ipvesp/clipboard-history/$CLIPBOARD_HISTORY_COMMIT/install.sh" | CLIPBOARD_HISTORY_COMMIT="$CLIPBOARD_HISTORY_COMMIT" bash
 ```
 
-The installer checks for `gtk4`, `wl-clipboard`, `pkgconf` and Rust, installs missing packages with `sudo pacman`, builds the application, creates a user service to watch copied text, adds the Super+V binding, and enables the Omarchy bar plugin. Review `install.sh` before running it. It does not require root for app or config files.
+The installer verifies that the application and Omarchy plugin come from the reviewed commit before installing either one. It checks for `gtk4`, `wl-clipboard`, `pkgconf` and Rust, installs missing packages with `sudo pacman`, builds the application, creates a user service, adds the Super+V binding, and enables the Omarchy bar plugin. Review `install.sh` before running it. It does not require root for app or config files.
 
 ## Settings
 
@@ -33,7 +36,7 @@ The settings file is `$XDG_CONFIG_HOME/clipboard-history/settings.json` (or `~/.
 ## Remove
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ipvesp/clipboard-history/main/uninstall.sh | bash
+curl -fsSL "https://raw.githubusercontent.com/ipvesp/clipboard-history/$CLIPBOARD_HISTORY_COMMIT/uninstall.sh" | bash
 ```
 
 The uninstaller removes the plugin, watcher, keybinding, and executables. It keeps the database and settings so you can preserve your history.
