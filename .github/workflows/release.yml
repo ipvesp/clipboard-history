@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - manifest.json
+      - src/**
+      - BarWidget.qml
+      - Panel.qml
+      - install.sh
+      - uninstall.sh
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check SemVer and matching versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
+          plugin_version="$(jq -r '.version' manifest.json)"
+          [[ "$cargo_version" == "$plugin_version" ]]
+          [[ "$cargo_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]
+          echo "TAG=v$cargo_version" >> "$GITHUB_ENV"
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists"
+            exit 0
+          fi
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "Clipboard History $TAG" --generate-notes
