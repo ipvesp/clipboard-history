@@ -3,7 +3,7 @@
   "id": "vesp.clipboard-history",
   "name": "Clipboard History",
   "version": "1.1.2",
-  "author": "ipvesp",
+  "author": "Vesp",
   "license": "MIT",
   "description": "Clipboard history with a keyboard popup and a configurable bar widget.",
   "kinds": ["bar-widget"],
