@@ -2,6 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+(cd "$root" && cargo build --locked)
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/data/clipboard-history"
@@ -25,6 +26,12 @@ db.execute('CREATE TABLE clipboard_items (id INTEGER PRIMARY KEY AUTOINCREMENT, 
 db.execute('INSERT INTO clipboard_items(content) VALUES (?)', ('old entry',))
 db.commit()
 PY
+chmod 755 "$tmp/data/clipboard-history"
+chmod 644 "$tmp/data/clipboard-history/history.db"
+mkdir -p "$tmp/data/clipper"
+printf 'legacy' > "$tmp/data/clipper/history.db"
+chmod 755 "$tmp/data/clipper"
+chmod 644 "$tmp/data/clipper/history.db"
 
 python3 - "$tmp/pixel.png" <<'PY'
 import base64, pathlib, sys
@@ -49,5 +56,26 @@ items = db.execute('SELECT kind, content, data FROM clipboard_items ORDER BY id'
 assert [item[0] for item in items] == ['text', 'link', 'code', 'image'], items
 assert items[-1][1] == 'image/png'
 assert items[-1][2] == pathlib.Path(sys.argv[2]).read_bytes()
+directory = pathlib.Path(sys.argv[1]).parent
+assert directory.stat().st_mode & 0o777 == 0o700
+assert pathlib.Path(sys.argv[1]).stat().st_mode & 0o777 == 0o600
+legacy = directory.parent / 'clipper'
+assert legacy.stat().st_mode & 0o777 == 0o700
+assert (legacy / 'history.db').stat().st_mode & 0o777 == 0o600
 print('Migration, link, code, image storage, and image deduplication passed.')
+PY
+
+mkdir -p "$tmp/new-data"
+chmod 755 "$tmp/new-data"
+XDG_DATA_HOME="$tmp/new-data" CLIP_TEST_MODE=text CLIP_TEST_TEXT='private' "$binary" capture </dev/null
+python3 - "$tmp/new-data/clipboard-history" <<'PY'
+import pathlib, sys
+directory = pathlib.Path(sys.argv[1])
+assert directory.stat().st_mode & 0o777 == 0o700
+assert (directory / 'history.db').stat().st_mode & 0o777 == 0o600
+for suffix in ('-wal', '-shm', '-journal'):
+    sidecar = directory / ('history.db' + suffix)
+    if sidecar.exists():
+        assert sidecar.stat().st_mode & 0o777 == 0o600
+print('New history permissions passed.')
 PY

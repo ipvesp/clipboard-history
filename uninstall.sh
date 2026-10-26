@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-plugin_id="io.github.ipvesp.clipboard-history"
-if omarchy plugin list --json | jq -e --arg id "$plugin_id" 'any(.[]; .id == $id)' >/dev/null; then
-  omarchy plugin remove "$plugin_id" --yes
-fi
+for plugin_id in vesp.clipboard-history io.github.ipvesp.clipboard-history; do
+  if [[ -e "$HOME/.config/omarchy/plugins/$plugin_id" || -L "$HOME/.config/omarchy/plugins/$plugin_id" ]]; then
+    omarchy plugin remove "$plugin_id" --yes
+  fi
+done
 
 systemctl --user disable --now clipboard-history.service 2>/dev/null || true
 rm -f "$HOME/.config/systemd/user/clipboard-history.service"

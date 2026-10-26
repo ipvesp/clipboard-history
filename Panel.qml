@@ -5,7 +5,7 @@ import qs.Ui
 
 Panel {
   id: root
-  moduleName: "io.github.ipvesp.clipboard-history"
+  moduleName: "vesp.clipboard-history"
   manageIpc: false
 
   property var anchorItem: null

@@ -2,8 +2,9 @@
 set -euo pipefail
 
 repo_url="https://github.com/ipvesp/clipboard-history.git"
-plugin_id="io.github.ipvesp.clipboard-history"
-release_ref="v1.1.1"
+plugin_id="vesp.clipboard-history"
+legacy_plugin_id="io.github.ipvesp.clipboard-history"
+release_ref="v1.1.2"
 root=""
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
   root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,7 +50,7 @@ if [[ -e "$HOME/.local/bin/vesp" ]] &&
   exit 1
 fi
 
-for command in git omarchy hyprctl systemctl; do
+for command in git omarchy omarchy-shell hyprctl systemctl jq python3 pacman sudo; do
   command -v "$command" >/dev/null || { echo "Missing command: $command" >&2; exit 1; }
 done
 
@@ -81,6 +82,7 @@ fi
 omarchy plugin validate "$stage"
 
 install -Dm755 "$root/target/release/clipboard-history" "$HOME/.local/bin/clipboard-history"
+"$HOME/.local/bin/clipboard-history" secure
 # GTK keeps one application process alive; stop the old instance after replacing its binary.
 pkill -u "$(id -u)" -f "^$HOME/.local/bin/clipboard-history$" 2>/dev/null || true
 
@@ -107,7 +109,8 @@ RestartSec=2
 WantedBy=default.target
 EOF
 systemctl --user daemon-reload
-systemctl --user enable --now clipboard-history.service
+systemctl --user enable clipboard-history.service
+systemctl --user restart clipboard-history.service
 
 bindings="$HOME/.config/hypr/bindings.lua"
 mkdir -p "$(dirname "$bindings")"
@@ -163,6 +166,9 @@ if ! omarchy plugin enable "$plugin_id"; then
   omarchy-shell shell rescanPlugins >/dev/null || true
   echo "Plugin enable failed; restored previous checkout." >&2
   exit 1
+fi
+if [[ -e "$plugins_dir/$legacy_plugin_id" || -L "$plugins_dir/$legacy_plugin_id" ]]; then
+  omarchy plugin remove "$legacy_plugin_id" --yes
 fi
 if [[ -n "$backup" ]]; then rm -rf "$backup"; fi
 

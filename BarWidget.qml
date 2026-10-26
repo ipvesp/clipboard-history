@@ -5,7 +5,7 @@ import qs.Ui
 
 BarWidget {
   id: root
-  moduleName: "io.github.ipvesp.clipboard-history"
+  moduleName: "vesp.clipboard-history"
 
   property var preferences: ({ history_limit: 100, show_bar: true })
   readonly property bool shown: preferences.show_bar !== false

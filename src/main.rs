@@ -11,7 +11,8 @@ use std::cell::{Cell, RefCell};
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::time::Duration;
@@ -87,6 +88,9 @@ impl Default for Settings {
 }
 
 fn main() {
+    // SQLite creates WAL and shared-memory files as well as history.db.
+    // A private umask covers every file created by this process.
+    unsafe { libc::umask(0o077) };
     let args: Vec<String> = env::args().collect();
 
     match args.get(1).map(String::as_str) {
@@ -104,6 +108,12 @@ fn main() {
         Some("capture") => {
             if let Err(err) = capture_clipboard() {
                 eprintln!("Capture error: {err}");
+            }
+        }
+        Some("secure") => {
+            if let Err(err) = open_database() {
+                eprintln!("History permissions error: {err}");
+                std::process::exit(2);
             }
         }
 
@@ -191,7 +201,33 @@ fn run_cli(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn database_path() -> PathBuf {
+fn secure_existing_file(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        }
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Not a regular file: {}", path.display()),
+        )),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn secure_directory(path: &Path) -> io::Result<()> {
+    fs::create_dir_all(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Not a directory: {}", path.display()),
+        ));
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+}
+
+fn database_path() -> io::Result<PathBuf> {
     let base = env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
@@ -199,24 +235,33 @@ fn database_path() -> PathBuf {
 
     let directory = base.join("clipboard-history");
 
-    if let Err(err) = fs::create_dir_all(&directory) {
-        eprintln!("Veri klasörü oluşturulamadı: {err}");
-    }
+    secure_directory(&directory)?;
 
     let path = directory.join("history.db");
+    let old = base.join("clipper/history.db");
+    if old.exists() {
+        secure_directory(&base.join("clipper"))?;
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            secure_existing_file(&old.with_file_name(format!("history.db{suffix}")))?;
+        }
+    }
     if !path.exists() {
-        let old = base.join("clipper/history.db");
         if old.exists() {
             if let Ok(source) = Connection::open(old) {
                 let _ = source.execute("VACUUM INTO ?1", params![path.to_string_lossy()]);
             }
         }
     }
-    path
+    Ok(path)
 }
 
-fn open_database() -> rusqlite::Result<Connection> {
-    let connection = Connection::open(database_path())?;
+fn open_database() -> Result<Connection, Box<dyn std::error::Error>> {
+    let path = database_path()?;
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        secure_existing_file(&path.with_file_name(format!("history.db{suffix}")))?;
+    }
+    let connection = Connection::open(&path)?;
+    secure_existing_file(&path)?;
 
     connection.execute_batch(
         "
@@ -234,6 +279,9 @@ fn open_database() -> rusqlite::Result<Connection> {
         ON clipboard_items(created_at DESC);
         ",
     )?;
+    for suffix in ["-wal", "-shm", "-journal"] {
+        secure_existing_file(&path.with_file_name(format!("history.db{suffix}")))?;
+    }
 
     let mut columns = connection.prepare("PRAGMA table_info(clipboard_items)")?;
     let names: Vec<String> = columns
@@ -376,7 +424,7 @@ fn store_item(
     Ok(())
 }
 
-fn trim_history(limit: usize) -> rusqlite::Result<()> {
+fn trim_history(limit: usize) -> Result<(), Box<dyn std::error::Error>> {
     let connection = open_database()?;
     connection.execute(
         "DELETE FROM clipboard_items WHERE id NOT IN
@@ -386,7 +434,7 @@ fn trim_history(limit: usize) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn clear_history() -> rusqlite::Result<()> {
+fn clear_history() -> Result<(), Box<dyn std::error::Error>> {
     let connection = open_database()?;
     connection.execute("DELETE FROM clipboard_items", [])?;
 
@@ -395,7 +443,10 @@ fn clear_history() -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn load_items(search: &str, filter: &str) -> rusqlite::Result<Vec<ClipboardItem>> {
+fn load_items(
+    search: &str,
+    filter: &str,
+) -> Result<Vec<ClipboardItem>, Box<dyn std::error::Error>> {
     let connection = open_database()?;
     let mut output = Vec::new();
     let search = format!("%{}%", search.trim());
@@ -423,7 +474,7 @@ fn load_items(search: &str, filter: &str) -> rusqlite::Result<Vec<ClipboardItem>
     Ok(output)
 }
 
-fn delete_item(id: i64) -> rusqlite::Result<()> {
+fn delete_item(id: i64) -> Result<(), Box<dyn std::error::Error>> {
     let connection = open_database()?;
 
     connection.execute("DELETE FROM clipboard_items WHERE id = ?1", params![id])?;
